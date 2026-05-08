@@ -15,13 +15,16 @@
 - 1 块 320×480 彩色 LCD 副屏
 - 1 套 PC 后台软件（含 Claude Code hook 集成）
 
-核心价值：**把 Claude Code 的权限确认 UI 从终端移到独立小屏**，按键直接做决定，避免「在主屏幕来回切焦点 + 按数字 + 回车」的低效循环。
+核心价值（两条同等重要）：
+
+1. **效率层**：把 Claude Code 的权限确认 UI 从终端移到独立小屏，按键直接做决定，避免「在主屏幕来回切焦点 + 按数字 + 回车」的低效循环。
+2. **体验层**：把数字 + Enter 这样需要视觉对焦的输入，换成有清脆物理反馈的「啪、啪、啪」按键。每次确认都是一个小小的多巴胺触发——把使用 Claude Code 这件事变得**爽**。这一点不是附加价值，而是产品差异化的核心。
 
 ### 1.1 目标用户与场景
 
-- 重度使用 Claude Code 的开发者
-- 经常处理「需要确认大量工具调用」的任务（如 agent 自动化、多文件修改）
-- 希望解放主显示器空间、减少 context-switch
+- **任何 Claude Code 用户**——不限重度/轻度，只要会被权限弹窗打断的人都是受众
+- 经常处理「需要确认大量工具调用」的任务（如 agent 自动化、多文件修改）尤其受益
+- 希望解放主显示器空间、减少 context-switch、并且想让交互过程更有趣
 
 ### 1.2 产品定位
 
@@ -39,7 +42,7 @@
 
 | 部件 | 选型 | 说明 |
 |--|--|--|
-| 键盘 | 用户现有 QMK/VIA 可编程键盘，至少 4 个空白键 | 4 键映射为 F20 / F21 / F22 / F23（HID 标准里几乎不用的码位）；语音键支持 Tap / Hold 区分 |
+| 键盘 | 用户现有 QMK/VIA 可编程键盘，至少 4 个空白键 | 4 键映射为 F20 / F21 / F22 / F23（HID 标准里几乎不用的码位）。v1 各键均为简单映射；v2 时键 4 拆 Tap / Hold |
 | LCD 副屏 | **WT32-SC01 Plus** (ESP32-S3 + 3.5" 320×480 电容触摸 LCD + USB-C) | 价格约 150 元；自带外壳；社区例程多。备选：CrowPanel ESP32 3.5" / 淘宝 ESP32-S3 + ILI9488 模块 |
 | 连线 | USB-C 数据线（屏幕） + USB（键盘） | 用户自备；可选 USB hub 整合 |
 
@@ -60,9 +63,8 @@
 
 ┌─ 键盘固件 (QMK, 用户已有键盘)          ┐
 │   • 4 空白键 → F20 / F21 / F22 / F23   │
-│   • F23 (语音) 区分 Tap / Hold:        │
-│       Tap   = F23                      │
-│       Hold  = Shift+F23                │
+│   • v1: F23 单纯映射，不区分 Tap/Hold  │
+│   • v2: F23 拆 Tap/Hold (语音用)       │
 └────────────────────────────────────────┘
 
 ┌─ PC 后台服务 claude-keypad-svc         ┐
@@ -71,9 +73,9 @@
 │   • 内嵌 HTTP server (127.0.0.1 only)  │
 │       ← Claude Code hook POST prompt   │
 │       → 回复 allow / deny / ask        │
-│   • Whisper 本地推理 + 云端 STT 客户端 │
 │   • Transcript JSONL 解析（取 model / │
 │     token / context）                  │
+│   • TOML 配置文件监听 + 热重载         │
 │   • 系统托盘                           │
 └────────────────────────────────────────┘
 
@@ -84,12 +86,10 @@
 │   • 输出 hookSpecificOutput JSON       │
 └────────────────────────────────────────┘
 
-┌─ 配置 GUI (Tauri)                      ┐
-│   • STT 引擎选择                       │
-│   • 语音键模式 (Push-to-talk / Toggle) │
-│   • 危险词高亮规则                     │
-│   • 项目白名单                         │
-│   • 屏幕显示主题                       │
+┌─ 配置：TOML 文件 + 系统托盘菜单        ┐
+│   • 无独立 GUI 程序                    │
+│   • 托盘「Edit config」 → 默认编辑器   │
+│   • 见第 8 节                          │
 └────────────────────────────────────────┘
 ```
 
@@ -151,7 +151,7 @@ hook 脚本输出 stdout:
 {"type":"prompt","tool":"Bash","args":"rm -rf ...","danger":["rm -rf"],"cwd":"slot_machine"}
 {"type":"status","model":"claude-opus-4-7","tokens":12453,"context_pct":34}
 {"type":"idle"}
-{"type":"toast","level":"info","text":"语音录制中..."}
+{"type":"toast","level":"info","text":"配置已重载"}
 ```
 
 **屏 → PC**
@@ -172,10 +172,12 @@ hook 脚本输出 stdout:
 | 键 1 | F20 | `allow`（仅本次） | 无操作 |
 | 键 2 | F21 | `allow` + `remember=true` 写入 `.claude/settings.local.json` | 无操作 |
 | 键 3 | F22 | `deny` | 无操作 |
-| 键 4 Tap | F23 | （v2 考虑：拒绝 + 录音说明原因） | 录音 → STT → 注入到 Claude Code 输入框 |
-| 键 4 Hold | Shift+F23 | 同 Tap | Push-to-talk：按下开始录音，松开停止+发送 |
+| 键 4 | F23 | **v1：无操作**（保留物理按键，但不响应；预留给 v2 语音） | **v1：无操作** |
 
-「无操作」可以在配置里改成「滚动屏幕历史」「打开 GUI」等，v1 默认空。
+> v1 不绑定键 4，避免「按了但没反应」的歧义；屏幕上提示文案也只显示 1/2/3。
+> v2 计划：键 4 接入语音录入（详见第 6 节，整节移入 v2 范围）。
+
+「无操作」可以在配置里改成「滚动屏幕历史」「打开配置」等，v1 默认空。
 
 ---
 
@@ -213,26 +215,31 @@ hook 脚本输出 stdout:
 │ ─────────────────────────  │
 │ slot_machine               │  ← 当前活跃项目
 │                            │
-│ Tokens (session)           │
-│   ▓▓▓▓▓▓▓▓░░  12,453       │
+│ Session tokens             │
+│   12,453                   │  ← 单纯计数，无进度条
 │                            │
 │ Context                    │
-│   ▓▓▓▓░░░░░░  34%          │
+│   ▓▓▓▓░░░░░░  34%          │  ← 占当前模型上下文窗口的比例
 │                            │
 └────────────────────────────┘
 ```
 
-数据源：`claude-keypad-svc` 解析 `transcript_path` 指向的 JSONL。
+字段说明：
+
+- **Session tokens**：本次 session 累计消耗的 token 数（一个不断增长的计数器，没有显式上限——所以**不画进度条**，纯数字展示）。
+- **Context**：当前 conversation 已用 token / 当前模型的 context window 上限。这个**有上限**（如 Opus 4.7 是 1M tokens），所以是百分比 + 进度条。当它接近 80% 时屏幕会变成警示色，提醒该 `/compact` 了。
+
+数据源：`claude-keypad-svc` 解析 `transcript_path` 指向的 JSONL，累加 input/output tokens；context 上限根据 transcript 里的 model 字段查一张内置映射表。
 
 > **v1 不显示**：5h 配额、7d 配额、配额重置时间——Claude Code 不暴露此数据，砍出 MVP，进 v2 待研究清单。
 
 **5.1.3 提示态**
 
-录音中、网络错误、服务未连接等用底部 toast 显示，2 秒后回到主状态。
+网络错误、服务未连接、配置重载等用底部 toast 显示，2 秒后回到主状态。
 
 ### 5.2 危险词高亮
 
-服务端在推 `prompt` 消息时，把命中的危险词位置编入 `danger` 字段；屏幕负责渲染颜色。规则在配置 GUI 里可编辑，默认表：
+服务端在推 `prompt` 消息时，把命中的危险词位置编入 `danger` 字段；屏幕负责渲染颜色。规则在 `config.toml` 的 `[danger_words]` 节编辑，默认表：
 
 ```
 rm -rf  /  rm -fr
@@ -248,37 +255,40 @@ chmod 777
 
 ---
 
-## 6. 语音输入
+## 6. 语音输入（**整节挪到 v2，v1 不实现**）
 
-### 6.1 模式
+> v1 决策：STT（本地 Whisper / 云端 API / 系统语音）和文本注入都属于「重组件」，会显著拉大安装包、跨机一致性测试面、出错路径。v1 先把权限按键和屏幕的核心闭环做扎实，语音延后。
+>
+> v2 启动时回到本节基线，再做选型与实现。
+
+以下为 v2 设计草案，留作参考：
+
+<details>
+<summary>v2 草案展开</summary>
+
+### 6.1 模式（v2）
 
 | 模式 | 触发 | 行为 |
 |--|--|--|
 | Push-to-talk | 长按键 4（Hold）| 按下开始录音，松开停止 + 立刻 STT 出结果 |
 | Toggle | 短按键 4（Tap）| 第一次按开始录音，第二次按停止 |
 
-模式选哪个由用户配置，但**两个手势同时支持**——配置项决定 Tap 走「toggle 切换」还是「忽略」，Hold 始终是 PTT。
+QMK 层 Tap/Hold 区分：Tap = F23，Hold = Shift+F23（或 QMK custom keycode）。
 
-### 6.2 STT 引擎
+### 6.2 STT 引擎（v2）
 
-抽象成 `STTEngine` interface，三个实现：
+抽象成 `STTEngine` interface，至少两个实现：
 
 | 实现 | 默认 | 依赖 |
 |--|--|--|
-| `WhisperLocal` | ✅ 默认 | faster-whisper Python 子进程，模型 small/medium 自动选 |
-| `OpenAICloud` | 可选 | OPENAI_API_KEY，调用 whisper-1 |
-| `WindowsSpeech` | 可选 | Win+H 系统语音，via UI Automation |
+| `WhisperLocal` | ✅ 默认 | faster-whisper Python 子进程 |
+| `OpenAICloud` | 可选 | API key，调用 whisper-1 |
 
-切换在配置 GUI 里完成；切换 `WhisperLocal` 时自动下载模型（首次约 500MB）。
+### 6.3 文本注入（v2）
 
-### 6.3 文本注入
+剪贴板 + Ctrl+V，不直接 SendInput 打字（中文输入法兼容性差）。
 
-录音转文字后，把结果注入当前焦点的 Claude Code 终端。方案：
-
-1. 把文本写入剪贴板
-2. 模拟 Ctrl+V
-
-不直接 SendInput 打字（中文输入法兼容性差）。
+</details>
 
 ---
 
@@ -346,48 +356,92 @@ chmod 777
 
 ---
 
-## 8. 配置 GUI
+## 8. 配置：纯 TOML 文件 + 系统托盘（v1 最轻方案）
 
-技术栈：**Tauri**（Rust 后端 + WebView 前端，安装包小、原生集成）。
+v1 不做独立 GUI 程序——配置就是一个 TOML 文件，托盘菜单点一下「编辑配置」就用系统默认编辑器（记事本 / VSCode / 别的）打开。保存后服务监听文件变化、热重载。
 
-### 8.1 主要配置项
+理由：
 
+- 安装包不带 UI 框架，~3-5MB Rust 单 exe 即可
+- 朋友间复制配置 = 复制一个文本文件，简单粗暴
+- 改配置不需要再开一个程序窗口
+- 有人想自动化（脚本 / Ansible 部署给团队）也直接改文件
+
+代价：
+
+- 第一次配置门槛比纯 GUI 高一点（要看注释/文档）
+- 错的 TOML 语法会让服务报错——所以加载失败时托盘弹气泡 + 回退到上一次有效配置
+
+### 8.1 配置文件位置
+
+`%APPDATA%\claude-keypad\config.toml`
+
+### 8.2 默认 TOML 内容（含中文注释）
+
+```toml
+# claude-keypad 配置文件
+# 改完保存即生效，不需要重启服务。
+
+[server]
+# 本地 HTTP 端口，给 Claude Code hook 用
+port = 48420
+
+# 服务等待按键的超时（秒），超时后回退到终端原生 ask
+permission_timeout_secs = 300
+
+[screen]
+# 串口设备名（Windows 上形如 COM3）。设为 "auto" 让服务自动发现
+serial_port = "auto"
+
+# 接近 context 上限的告警阈值（百分比）
+context_warning_pct = 80
+
+[keys]
+# 物理键到动作的映射。可选动作：
+#   "allow"            本次允许
+#   "allow_remember"   允许 + 写入 .claude/settings.local.json
+#   "deny"             本次拒绝
+#   "open_config"      打开本配置文件
+#   "noop"             什么都不做
+key1 = "allow"
+key2 = "allow_remember"
+key3 = "deny"
+key4 = "noop"   # v2 会替换为语音
+
+[danger_words]
+# 在权限弹屏上要标红的命令片段（大小写不敏感、可包含空格）
+patterns = [
+  "rm -rf",
+  "rm -fr",
+  "sudo",
+  "curl ",      # 后续可加更精细规则
+  "dd if=",
+  "mkfs",
+  "> /dev/sd",
+  "chmod 777",
+]
+
+[projects]
+# 项目白名单：仅当 hook 输入的 cwd 命中以下前缀，才走副屏路径
+# 留空数组 = 所有项目都走副屏
+allow_prefixes = []
 ```
-[一般]
-  开机自启           [✓]
-  显示系统托盘图标    [✓]
 
-[键盘]
-  键 1 动作          Allow ▾
-  键 2 动作          Allow + Remember ▾
-  键 3 动作          Deny ▾
-  键 4 Tap 动作       Toggle Recording ▾
-  键 4 Hold 动作      Push-to-talk ▾
+### 8.3 系统托盘菜单
 
-[屏幕]
-  串口设备           COM3 ▾    [刷新]
-  空闲状态显示        ●● ●○ ○○
-  危险词规则          [编辑...]
+| 菜单项 | 行为 |
+|--|--|
+| `claude-keypad - running` | 静态状态行，灰色 |
+| `Edit config…` | `start "" "%APPDATA%\claude-keypad\config.toml"` |
+| `Reveal config in Explorer` | 打开 APPDATA 目录 |
+| `Reload config` | 强制重载（一般不用，服务自己监听文件变化） |
+| `Open log…` | 打开最新日志文件 |
+| `--` | |
+| `Quit` | 退出服务（hook 后续会 graceful 降级到 ask） |
 
-[语音]
-  STT 引擎           Whisper Local ▾
-  Whisper 模型        small ▾
-  OpenAI API Key     [_______]
-  发送方式            Ctrl+V (剪贴板)
+### 8.4 v2 升级路径
 
-[Claude Code]
-  当前项目白名单
-    ✓ /path/to/slot_machine
-    ✓ /path/to/another
-    [+] 添加项目
-
-[关于]
-  版本 / 检查更新 / 卸载
-```
-
-### 8.2 配置文件
-
-`%APPDATA%\claude-keypad\config.toml`，便于人工编辑、便于朋友间复制配置。
+如果 v1 上线后发现纯 TOML 对朋友确实太硬核，再加一层：服务自己起 `localhost:<port>/config` 一个 HTML 表单页，托盘菜单 `Edit config…` 改成在浏览器打开它。**这一步不需要换技术栈、不引入新依赖**——服务里嵌个静态 HTML 就行。
 
 ---
 
@@ -397,14 +451,15 @@ chmod 777
 
 - [x] PreToolUse hook 接管权限确认
 - [x] 屏幕渲染 prompt（Bash / Edit / Write 三种工具）
-- [x] 4 键映射 + 语义
-- [x] Whisper 本地 STT + 文本注入
+- [x] 3 键完整语义（Allow / Allow All / Deny）+ 第 4 键留空（不响应）
+- [x] 空闲状态屏：模型、Session tokens、Context %
 - [x] graceful 降级（服务/屏幕缺失时回 ask）
-- [x] 配置 GUI（最小可用）
-- [x] Windows 安装包（MSI）
+- [x] TOML 配置 + 系统托盘
+- [x] Windows 安装包
 
 ### 9.2 v1 不做（v2+）
 
+- [ ] **语音输入**（键 4 + STT + 文本注入）——完整功能延后
 - [ ] 5h / 7d 配额显示（数据源缺失，待研究）
 - [ ] 触摸屏交互
 - [ ] Mac / Linux 支持
@@ -413,6 +468,7 @@ chmod 777
 - [ ] OTA 固件更新（v1 用户手动刷）
 - [ ] Read / Glob / Grep 等低风险工具的差异化渲染（v1 统一显示）
 - [ ] Cursor / Codex 等其他 AI 工具适配
+- [ ] HTML 配置表单（v1 仅 TOML）
 
 ### 9.3 验收标准
 
@@ -428,8 +484,7 @@ chmod 777
 |--|--|
 | Windows 杀软误报全局键盘监听 | 软件签名（用户 v1 自签名 + 文档说明）；申请 SmartScreen 信誉 |
 | WT32-SC01 Plus 国内供货周期 | 备选 CrowPanel / 淘宝模块；spec 把屏幕协议写抽象 |
-| QMK 键盘多样性 → 朋友的键盘不一定是 F20-F23 | 配置 GUI 提供「学习模式」：用户按一下要绑定的键，软件记录其 HID 码 |
-| Whisper 首次下载 500MB | 安装包不打包模型；首次启动后台下载 + 进度条 |
+| QMK 键盘多样性 → 朋友的键盘不一定是 F20-F23 | TOML 里 `[keys]` 节支持把 4 个动作绑到任意 HID 码；托盘菜单提供「Detect last pressed key」帮用户填 |
 | Claude Code hook schema 变更 | 把 hook IO 解析放在独立模块；版本探测 + 兼容降级 |
 | 当 Claude Code 进入 plan mode 等特殊模式 | hook 输入有 `permission_mode` 字段，服务端按需特殊处理 |
 
@@ -439,11 +494,11 @@ chmod 777
 
 1. 用户审阅本文档
 2. 进入 `writing-plans` 技能，把上面的 v1 范围拆成可执行任务清单
-3. 实施顺序建议：
-   - **Phase 1**：PC 服务 + hook 脚本，仅终端打印（验证 hook 链路通）
+3. 实施顺序建议（v1）：
+   - **Phase 1**：PC 服务骨架 + hook 脚本，仅终端打印工具调用信息（验证 hook 链路通、graceful 降级正确）
    - **Phase 2**：屏幕固件 + 串口协议 + 渲染 prompt（验证硬件链路通）
-   - **Phase 3**：键盘全局监听 + 4 键完整语义
-   - **Phase 4**：语音输入
-   - **Phase 5**：配置 GUI + 安装包
+   - **Phase 3**：键盘全局监听 + 3 键完整语义（Allow / Allow All / Deny），端到端打通
+   - **Phase 4**：空闲状态屏（Transcript JSONL 解析 → 模型 / Session tokens / Context %）
+   - **Phase 5**：TOML 配置 + 系统托盘 + Windows 安装包
 
-每个 phase 自成一个端到端可演示的里程碑。
+每个 phase 自成一个端到端可演示的里程碑。v2 启动时回到第 6 节做语音设计。
